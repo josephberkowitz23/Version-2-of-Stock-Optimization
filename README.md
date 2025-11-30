@@ -39,7 +39,7 @@ TICKERS = "AAPL MSFT NVDA AMZN GOOGL"
 from src.portfolio_v2 import run_portfolio_example_v2
 
 run_portfolio_example_v2(
-    tickers={TICKERS}.split(),
+    tickers=TICKERS.split(),
     start_date="2020-01-01",
     end_date="2024-01-01",
     bonmin_path="/content/bin/bonmin",
