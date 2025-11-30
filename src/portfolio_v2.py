@@ -92,32 +92,6 @@ def download_monthly_returns(
 def _normalize_asset_columns(returns_df: pd.DataFrame) -> pd.DataFrame:
     """Ensure asset columns are flat strings for downstream optimization models.
 
-    Data assembled via ``pd.concat(..., keys=...)`` or MultiIndex operations can
-    produce tuple-based or multi-level column labels. Pyomo expects hashable
-    scalar identifiers for sets, so we flatten the labels to a single level of
-    string tickers before constructing any models.
-    """
-
-    normalized = returns_df.copy()
-    cols = normalized.columns
-
-    if isinstance(cols, pd.MultiIndex):
-        level0 = cols.get_level_values(0)
-        level1 = cols.get_level_values(-1)
-
-        if len(set(level0)) == len(cols):
-            normalized.columns = level0.astype(str)
-        elif len(set(level1)) == len(cols):
-            normalized.columns = level1.astype(str)
-        else:
-            normalized.columns = ["_".join(str(part) for part in col if part != "") for col in cols]
-
-    elif all(isinstance(col, tuple) for col in cols):
-        normalized.columns = [str(col[0]) if len(col) > 0 else "" for col in cols]
-
-    return normalized
-
-
 # ---------------------------------------------------------------------------
 # Sector helpers
 # ---------------------------------------------------------------------------
