@@ -12,10 +12,10 @@ visualizes both the frontier and the corresponding allocations.
 install Python dependencies.
 ```python
 # Clone the repo (edit <your-username> if needed)
-!git clone https://github.com/josephberkowitz23/Version-1-of-Stock-Optimization.git
+!git clone https://github.com/josephberkowitz23/Version-2-of-Stock-Optimization.git
 
 # Move into the project folder
-%cd Version-1-of-Stock-Optimization
+%cd Version-2-of-Stock-Optimization
 
 # Install Python dependencies
 !python -m pip install -r requirements
