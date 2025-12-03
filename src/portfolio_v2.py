@@ -79,7 +79,8 @@ def download_monthly_returns(
 
     daily_prices = pd.concat(price_dict.values(), axis=1, keys=price_dict.keys())
     daily_prices = daily_prices.dropna(how="all")
-    daily_returns = daily_prices.pct_change().dropna(how="all")
+    daily_returns = daily_prices.pct_change(fill_method=None).dropna(how="all")
+
 
     monthly_returns = (1 + daily_returns).resample("ME").prod() - 1
     monthly_returns = monthly_returns.dropna(how="any")
