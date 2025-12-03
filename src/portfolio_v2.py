@@ -718,36 +718,41 @@ def run_portfolio_example_v2(
     # Backtest table: strategy vs cumulative return, mean, vol
     # Final distribution for a chosen scenario (here: 'medium')
     
-    # 1) Backtest table (if available)
+     # 1) Backtest table (if available)
     if backtest_df is not None:
+        perf_cols = ["Strategy", "CumulativeReturn", "MeanMonthlyReturn", "Volatility"]
+        pretty_backtest = backtest_df[perf_cols].copy()
+        pretty_backtest[["CumulativeReturn", "MeanMonthlyReturn", "Volatility"]] = (
+            pretty_backtest[["CumulativeReturn", "MeanMonthlyReturn", "Volatility"]]
+            .round(4)
+        )
         print("\nBacktest performance:")
-        print(backtest_df[["Strategy", "CumulativeReturn",
-                           "MeanMonthlyReturn", "Volatility"]])
+        print(pretty_backtest)
 
-    # 2) Final portfolio distribution (choose the 'medium' scenario if it exists;
-    #    otherwise fall back to the highest-return scenario)
+    # 2) Final portfolio distribution (medium-risk scenario)
     recommended_alloc_df = None
     if scenarios_df is not None and len(scenarios_df) > 0:
         medium_mask = scenarios_df["Scenario"] == "medium"
         if medium_mask.any():
             row = scenarios_df[medium_mask].iloc[0]
         else:
-            # fallback: scenario with max expected return
+            # fallback: scenario with highest expected return
             row = scenarios_df.iloc[scenarios_df["ExpectedReturn"].idxmax()]
 
         weights_series = pd.Series(row["Weights"], name="Weight")
+
+        # kill tiny numerical noise like 7.6e-09
+        weights_series = weights_series.where(weights_series > 1e-6, 0.0)
+
         recommended_alloc_df = weights_series.to_frame()
-        recommended_alloc_df["ExpectedReturn"] = row["ExpectedReturn"]
-        recommended_alloc_df["Variance"] = row["Variance"]
+        recommended_alloc_df["Weight_pct"] = (recommended_alloc_df["Weight"] * 100).round(2)
+        recommended_alloc_df["ExpectedReturn"] = round(row["ExpectedReturn"], 4)
+        recommended_alloc_df["Variance"] = round(row["Variance"], 4)
 
         print("\nRecommended portfolio (weights):")
         print(recommended_alloc_df)
 
-    # Return just what you care about programmatically:
-    # backtest_df: strategy performance
-    # recommended_alloc_df: final portfolio weights
     return backtest_df, recommended_alloc_df
-
 
 __all__ = [
     "download_monthly_returns",
