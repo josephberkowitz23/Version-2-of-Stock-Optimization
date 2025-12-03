@@ -270,6 +270,14 @@ def sweep_efficient_frontier_nlp(
     the efficient frontier.
     """
 
+    # These parameters are retained for signature parity with the MIP variant.
+    _ = sector_map, bonmin_path
+
+    model, assets, mu, sigma = build_markowitz_model(returns_df)
+    # Respect the max_weight upper bound to mirror the MIP interface as closely
+    # as possible without discrete activation variables.
+    for asset in model.Assets:
+        model.x[asset].setub(max_weight)
     model, assets, mu, sigma = build_markowitz_model(returns_df)
     sigma_np = sigma.values
     n_assets = len(assets)
