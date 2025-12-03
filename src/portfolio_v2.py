@@ -94,10 +94,18 @@ def download_monthly_returns(
 
 
 def _normalize_asset_columns(returns_df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure asset columns are flat strings for downstream optimization models."""
+    """Ensure asset columns are simple ticker strings for downstream models."""
     returns_df = returns_df.copy()
-    # Flatten any MultiIndex / non-string column labels to simple strings
-    returns_df.columns = [str(c) for c in returns_df.columns]
+    flat_cols: list[str] = []
+
+    for c in returns_df.columns:
+        # yfinance often gives columns like ('AAPL', 'AAPL'); keep just the ticker
+        if isinstance(c, tuple) and len(c) > 0:
+            flat_cols.append(str(c[0]))
+        else:
+            flat_cols.append(str(c))
+
+    returns_df.columns = flat_cols
     return returns_df
 
 # ---------------------------------------------------------------------------
@@ -589,7 +597,9 @@ def backtest_strategies(
 
     # Training phase
     train_returns = download_monthly_returns(tickers, train_start, train_end)
+    train_returns = _normalize_asset_columns(train_returns)
     sector_map = get_sector_mapping(train_returns.columns)
+
 
     try:
         frontier_df, alloc_df = sweep_efficient_frontier_mip(
@@ -619,6 +629,7 @@ def backtest_strategies(
     # Testing data
     test_tickers = list(dict.fromkeys(list(tickers) + ["^GSPC", "BTC-USD"]))
     test_returns = download_monthly_returns(test_tickers, test_start, test_end)
+    test_returns = _normalize_asset_columns(test_returns)
 
     # Slice the optimized portfolio returns to available tickers
     opt_returns = test_returns[[t for t in tickers if t in test_returns.columns]]
@@ -658,6 +669,9 @@ def run_portfolio_example_v2(
     """End-to-end demo: download data, solve MIP frontier, and plot results."""
 
     monthly_returns = download_monthly_returns(tickers, start_date, end_date)
+    monthly_returns = _normalize_asset_columns(monthly_returns)
+
+    # Now columns are plain 'AAPL', 'MSFT', ...
     sector_map = get_sector_mapping(monthly_returns.columns)
 
     try:
