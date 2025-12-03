@@ -686,9 +686,8 @@ def run_portfolio_example_v2(
 
     plot_frontier(frontier_df)
     plot_allocations(alloc_df)
-
+    
     backtest_df = None
-        backtest_df = None
     if run_backtest:
         # Define an out of sample test window after the training period
         end_ts = pd.to_datetime(end_date)
@@ -716,9 +715,9 @@ def run_portfolio_example_v2(
                 min_stocks=min_stocks,
             )
         except RuntimeError as exc:
-            # Most likely: no valid price data in the test window
             print(f"[warn] Backtest failed due to data issues: {exc}")
             backtest_df = None
+
 
 
     return monthly_returns, frontier_df, alloc_df, scenarios_df, backtest_df
