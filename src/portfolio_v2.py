@@ -90,7 +90,7 @@ def download_monthly_returns(
 
 
 def _normalize_asset_columns(returns_df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure asset columns are flat strings for downstream optimization models.
+    """Ensure asset columns are flat strings for downstream optimization models."""
 
 # ---------------------------------------------------------------------------
 # Sector helpers
