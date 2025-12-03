@@ -318,9 +318,16 @@ def sweep_efficient_frontier_nlp(
     min_var = portfolio_variance(eq_weights, sigma_np)
     max_var_single = float(np.max(np.diag(sigma_np)))
 
-    min_cap = max(min_var * 0.5, 1e-8)
+    # Start closer to the *true* feasible region to avoid infeasible caps
+    raw_min_cap = max(min_var * 0.5, 1e-8)
+
+    # Bump the starting cap up a bit to give the model room under max_weight constraints
+    min_cap = raw_min_cap * 1.5     # or 2.0 if you still see issues
+
     max_cap = max(max_var_single * 1.5, min_cap * 5)
+
     caps = np.linspace(min_cap, max_cap, n_points)
+
 
     try:
         solver = SolverFactory("ipopt", executable=IPOPT_PATH)
