@@ -33,20 +33,21 @@ local `/content/bin` directory.
 to the BONMIN binary you just downloaded (IPOPT still works for the continuous
 model, but BONMIN is required for the mixed-integer version).
 ```python
-TICKERS = "AAPL MSFT NVDA AMZN"
-
-!python - <<'EOF'
 from src.portfolio_v2 import run_portfolio_example_v2
 
-run_portfolio_example_v2(
-    tickers=TICKERS.split(),
+tickers = "AAPL MSFT GOOGL AMZN META JNJ UNH PG KO MCD JPM BAC V MA CAT XOM CVX SPY TLT GLD".split()
+
+backtest_df, alloc_df = run_portfolio_example_v2(
+    tickers=tickers,
     start_date="2020-01-01",
-    end_date="2024-01-01",
-    bonmin_path="/content/bin/bonmin",
+    end_date="2024-12-31",
+    bonmin_path=None,
     n_points=60,
+    min_weight=0.05,
+    max_weight=0.10,
+    min_stocks=10,
     run_backtest=True,
 )
-EOF
 ```
 
 When the run finishes, the notebook will display two matplotlib figures: the
