@@ -442,7 +442,9 @@ def sweep_efficient_frontier_mip(
             alloc_data[asset].append(weight)
 
     if len(frontier_data["Risk"]) == 0:
-        raise RuntimeError("No feasible portfolios found. Try different tickers/dates.")
+        raise SolverUnavailableError(
+            "No feasible portfolios found with BONMIN; try adjusting inputs or use a continuous fallback."
+        )
 
     frontier_df = pd.DataFrame(frontier_data).sort_values("Risk").reset_index(drop=True)
     alloc_df = pd.DataFrame(alloc_data).sort_values("Risk").set_index("Risk")
