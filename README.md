@@ -33,7 +33,7 @@ local `/content/bin` directory.
 to the BONMIN binary you just downloaded (IPOPT still works for the continuous
 model, but BONMIN is required for the mixed-integer version).
 ```python
-TICKERS = "AAPL MSFT NVDA AMZN GOOGL"
+TICKERS = "AAPL MSFT NVDA AMZN"
 
 !python - <<'EOF'
 from src.portfolio_v2 import run_portfolio_example_v2
