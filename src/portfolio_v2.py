@@ -159,7 +159,7 @@ def build_markowitz_model(returns_df: pd.DataFrame):
     model.obj = Objective(rule=total_return, sense=maximize)
 
     def budget(m):
-        return sum(m.x[a] for a in m.Assets) == 1
+        return sum(m.x[a] for a in m.Assets) <= 1
 
     model.budget = Constraint(rule=budget)
 
@@ -204,7 +204,7 @@ def build_markowitz_mip_model(
     model.obj = Objective(rule=total_return, sense=maximize)
 
     def budget(m):
-        return sum(m.x[a] for a in m.Assets) == 1
+        return sum(m.x[a] for a in m.Assets) <= 1
 
     model.budget = Constraint(rule=budget)
 
