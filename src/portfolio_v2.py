@@ -650,28 +650,17 @@ def run_portfolio_example_v2(
     # Now columns are plain 'AAPL', 'MSFT', ...
     sector_map = get_sector_mapping(monthly_returns.columns)
 
-    # MAIN FRONTIER: keep MIP with 20% cap + min holdings
-    try:
-        frontier_df, alloc_df = sweep_efficient_frontier_mip(
-            monthly_returns,
-            sector_map,
-            bonmin_path=bonmin_path,
-            n_points=n_points,
-            min_weight=min_weight,
-            max_weight=max_weight,
-            min_stocks=min_stocks,
-        )
-    except SolverUnavailableError as exc:
-        print(f"[info] BONMIN unavailable ({exc}); falling back to IPOPT continuous frontier.")
-        frontier_df, alloc_df = sweep_efficient_frontier_nlp(
-            monthly_returns,
-            sector_map,
-            bonmin_path=bonmin_path,
-            n_points=n_points,
-            min_weight=min_weight,
-            max_weight=max_weight,
-            min_stocks=min_stocks,
-        )
+    # MAIN FRONTIER: use continuous (NLP) model for a smooth curve
+    frontier_df, alloc_df = sweep_efficient_frontier_nlp(
+        monthly_returns,
+        sector_map,
+        bonmin_path=bonmin_path,
+        n_points=n_points,
+        min_weight=min_weight,
+        max_weight=max_weight,
+        min_stocks=min_stocks,
+    )
+
 
     scenarios_df = build_risk_scenarios(monthly_returns, frontier_df, alloc_df)
 
