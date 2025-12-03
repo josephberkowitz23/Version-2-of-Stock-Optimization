@@ -278,6 +278,7 @@ def sweep_efficient_frontier_nlp(
     # as possible without discrete activation variables.
     for asset in model.Assets:
         model.x[asset].setub(max_weight)
+    model, assets, mu, sigma = build_markowitz_model(returns_df)
     sigma_np = sigma.values
     n_assets = len(assets)
 
