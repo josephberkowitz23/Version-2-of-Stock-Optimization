@@ -35,9 +35,7 @@ class SolverUnavailableError(RuntimeError):
     """Raised when a required solver binary cannot be located or is unusable."""
 
 
-# ---------------------------------------------------------------------------
 # Data helpers
-# ---------------------------------------------------------------------------
 
 def download_monthly_returns(
     tickers: Sequence[str],
@@ -108,9 +106,7 @@ def _normalize_asset_columns(returns_df: pd.DataFrame) -> pd.DataFrame:
     returns_df.columns = flat_cols
     return returns_df
 
-# ---------------------------------------------------------------------------
 # Sector helpers
-# ---------------------------------------------------------------------------
 
 def get_sector_mapping(tickers: Iterable[str]) -> Dict[str, str]:
     """Return a mapping from ticker to sector using yfinance, with fallbacks.
@@ -132,9 +128,7 @@ def get_sector_mapping(tickers: Iterable[str]) -> Dict[str, str]:
     return sector_map
 
 
-# ---------------------------------------------------------------------------
 # Core Markowitz model builders
-# ---------------------------------------------------------------------------
 
 def build_markowitz_model(returns_df: pd.DataFrame):
     """Build a continuous Pyomo Markowitz model (long-only, fully invested)."""
@@ -238,9 +232,7 @@ def build_markowitz_mip_model(
     return model, assets, mu, sigma
 
 
-# ---------------------------------------------------------------------------
 # Utility functions
-# ---------------------------------------------------------------------------
 
 def portfolio_variance(weights: Sequence[float], sigma: pd.DataFrame | np.ndarray) -> float:
     weights_arr = np.array(weights, dtype=float)
@@ -257,9 +249,7 @@ def choose_medium_frontier_point(frontier_df: pd.DataFrame) -> pd.Series:
     return frontier_df.iloc[mid_idx]
 
 
-# ---------------------------------------------------------------------------
 # Efficient frontier solvers
-# ---------------------------------------------------------------------------
 
 def sweep_efficient_frontier_nlp(
     returns_df: pd.DataFrame,
@@ -460,9 +450,7 @@ def sweep_efficient_frontier_mip(
     return frontier_df, alloc_df
 
 
-# ---------------------------------------------------------------------------
 # Plotting helpers
-# ---------------------------------------------------------------------------
 
 def plot_frontier(frontier_df: pd.DataFrame) -> None:
     """Plot the efficient frontier."""
@@ -506,9 +494,7 @@ def plot_allocations(alloc_df: pd.DataFrame) -> None:
     plt.show()
 
 
-# ---------------------------------------------------------------------------
 # Risk scenario construction
-# ---------------------------------------------------------------------------
 
 def build_risk_scenarios(
     returns_df: pd.DataFrame,
@@ -562,9 +548,7 @@ def build_risk_scenarios(
     return pd.DataFrame(scenarios)
 
 
-# ---------------------------------------------------------------------------
 # Paper trading / out-of-sample backtest
-# ---------------------------------------------------------------------------
 
 def _compute_strategy_metrics(weights: Dict[str, float], returns: pd.DataFrame) -> dict:
     # Align weights to columns and normalize
@@ -650,10 +634,7 @@ def backtest_strategies(
     metrics_df.index.name = "Strategy"
     return metrics_df.reset_index()
 
-
-# ---------------------------------------------------------------------------
 # Convenience wrapper
-# ---------------------------------------------------------------------------
 
 def run_portfolio_example_v2(
     tickers: Sequence[str],
@@ -698,15 +679,16 @@ def run_portfolio_example_v2(
 
     scenarios_df = build_risk_scenarios(monthly_returns, frontier_df, alloc_df)
 
+    # plots
     plot_frontier(frontier_df)
     plot_allocations(alloc_df)
-    
+
+    # backtest (out-of-sample)
     backtest_df = None
     if run_backtest:
-        # Define an out of sample test window after the training period
         end_ts = pd.to_datetime(end_date)
-        test_start_ts = end_ts + pd.DateOffset(days=1)      # first day after training
-        test_end_ts = test_start_ts + pd.DateOffset(months=12)  # next 12 months
+        test_start_ts = end_ts + pd.DateOffset(days=1)
+        test_end_ts = test_start_ts + pd.DateOffset(months=12)
 
         test_start_str = test_start_ts.strftime("%Y-%m-%d")
         test_end_str = test_end_ts.strftime("%Y-%m-%d")
@@ -732,9 +714,39 @@ def run_portfolio_example_v2(
             print(f"[warn] Backtest failed due to data issues: {exc}")
             backtest_df = None
 
+    # Pretty “recommended outputs”
+    # Backtest table: strategy vs cumulative return, mean, vol
+    # Final distribution for a chosen scenario (here: 'medium')
+    
+    # 1) Backtest table (if available)
+    if backtest_df is not None:
+        print("\nBacktest performance:")
+        print(backtest_df[["Strategy", "CumulativeReturn",
+                           "MeanMonthlyReturn", "Volatility"]])
 
+    # 2) Final portfolio distribution (choose the 'medium' scenario if it exists;
+    #    otherwise fall back to the highest-return scenario)
+    recommended_alloc_df = None
+    if scenarios_df is not None and len(scenarios_df) > 0:
+        medium_mask = scenarios_df["Scenario"] == "medium"
+        if medium_mask.any():
+            row = scenarios_df[medium_mask].iloc[0]
+        else:
+            # fallback: scenario with max expected return
+            row = scenarios_df.iloc[scenarios_df["ExpectedReturn"].idxmax()]
 
-    return monthly_returns, frontier_df, alloc_df, scenarios_df, backtest_df
+        weights_series = pd.Series(row["Weights"], name="Weight")
+        recommended_alloc_df = weights_series.to_frame()
+        recommended_alloc_df["ExpectedReturn"] = row["ExpectedReturn"]
+        recommended_alloc_df["Variance"] = row["Variance"]
+
+        print("\nRecommended portfolio (weights):")
+        print(recommended_alloc_df)
+
+    # Return just what you care about programmatically:
+    # backtest_df: strategy performance
+    # recommended_alloc_df: final portfolio weights
+    return backtest_df, recommended_alloc_df
 
 
 __all__ = [
