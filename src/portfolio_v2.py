@@ -30,6 +30,19 @@ from pyomo.opt import SolverFactory, TerminationCondition
 
 IPOPT_PATH = "/content/bin/ipopt"
 
+SECTOR_CAPS_DEFAULT: Dict[str, float] = {
+    "Technology": 0.25,
+    "Communication Services": 0.20,
+    "Consumer Cyclical": 0.20,
+    "Consumer Defensive": 0.20,
+    "Healthcare": 0.20,
+    "Financial Services": 0.20,
+    "Industrials": 0.20,
+    "Energy": 0.15,
+    "Real Estate": 0.15,
+    "Utilities": 0.15,
+    "Unknown": 0.20,  # fallback for anything we don't recognize
+}
 
 class SolverUnavailableError(RuntimeError):
     """Raised when a required solver binary cannot be located or is unusable."""
@@ -298,13 +311,13 @@ def sweep_efficient_frontier_nlp(
     This variant mirrors the MIP API but omits binary activation variables and
     selection count constraints, making it compatible with continuous solvers
     such as IPOPT. A variance cap is swept across ``n_points`` values to trace
-    the efficient frontier.
+    the efficient frontier, while respecting per-asset caps and sector caps.
     """
 
-    # These are unused but kept so the signature matches the MIP version
-    _ = sector_map, bonmin_path, min_weight, min_stocks
+    # min_weight, min_stocks are unused here but kept for signature parity
+    _ = bonmin_path, min_weight, min_stocks
 
-    # Build the continuous Markowitz model while enforcing the per-asset cap
+    # Build the continuous Markowitz model with a per-asset cap
     model, assets, mu, sigma = build_markowitz_model(
         returns_df,
         max_weight=max_weight,
@@ -313,21 +326,45 @@ def sweep_efficient_frontier_nlp(
     sigma_np = sigma.values
     n_assets = len(assets)
 
-    # Rough bounds for the risk caps
+    # ---------------------------
+    # Sector caps (new)
+    # ---------------------------
+    # Normalize sectors for this asset universe
+    sectors = sorted(set(sector_map.get(a, "Unknown") for a in assets))
+    sector_to_assets = {
+        s: [a for a in assets if sector_map.get(a, "Unknown") == s]
+        for s in sectors
+    }
+
+    # Build a per-sector max dict using SECTOR_CAPS_DEFAULT as baseline
+    sector_max_init = {
+        s: SECTOR_CAPS_DEFAULT.get(s, SECTOR_CAPS_DEFAULT["Unknown"])
+        for s in sectors
+    }
+
+    # Attach to the model
+    model.Sectors = Set(initialize=sectors)
+    model.SectorMax = Param(model.Sectors, initialize=sector_max_init)
+
+    def sector_cap_rule(m, s):
+        # sum of weights of assets in sector s ≤ sector cap
+        return sum(m.x[a] for a in sector_to_assets[s]) <= m.SectorMax[s]
+
+    model.sector_cap = Constraint(model.Sectors, rule=sector_cap_rule)
+
+    # ---------------------------
+    # Risk caps for frontier sweep
+    # ---------------------------
     eq_weights = np.ones(n_assets) / n_assets
     min_var = portfolio_variance(eq_weights, sigma_np)
     max_var_single = float(np.max(np.diag(sigma_np)))
 
-    # Start closer to the *true* feasible region to avoid infeasible caps
+    # Start the cap slightly above the naive min variance to avoid infeasible caps
     raw_min_cap = max(min_var * 0.5, 1e-8)
-
-    # Bump the starting cap up a bit to give the model room under max_weight constraints
-    min_cap = raw_min_cap * 1.5     # or 2.0 if you still see issues
-
+    min_cap = raw_min_cap * 1.5
     max_cap = max(max_var_single * 1.5, min_cap * 5)
 
     caps = np.linspace(min_cap, max_cap, n_points)
-
 
     try:
         solver = SolverFactory("ipopt", executable=IPOPT_PATH)
