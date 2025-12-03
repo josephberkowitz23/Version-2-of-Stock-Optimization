@@ -580,38 +580,31 @@ def backtest_strategies(
 ) -> pd.DataFrame:
     """Compare optimized vs benchmark strategies on an out-of-sample window."""
 
+    # -----------------------
     # Training phase
+    # -----------------------
     train_returns = download_monthly_returns(tickers, train_start, train_end)
     train_returns = _normalize_asset_columns(train_returns)
     sector_map = get_sector_mapping(train_returns.columns)
 
+    # For backtesting, always use a continuous frontier (no integer y's)
+    frontier_df, alloc_df = sweep_efficient_frontier_nlp(
+        train_returns,
+        sector_map,
+        bonmin_path=bonmin_path,
+        n_points=40,
+        min_weight=min_weight,
+        max_weight=max_weight,
+        min_stocks=min_stocks,
+    )
 
-    try:
-        frontier_df, alloc_df = sweep_efficient_frontier_mip(
-            train_returns,
-            sector_map,
-            bonmin_path=bonmin_path,
-            n_points=40,
-            min_weight=min_weight,
-            max_weight=max_weight,
-            min_stocks=min_stocks,
-        )
-    except SolverUnavailableError as exc:
-        print(f"[info] BONMIN unavailable during backtest ({exc}); using IPOPT fallback.")
-        frontier_df, alloc_df = sweep_efficient_frontier_nlp(
-            train_returns,
-            sector_map,
-            bonmin_path=bonmin_path,
-            n_points=40,
-            min_weight=min_weight,
-            max_weight=max_weight,
-            min_stocks=min_stocks,
-        )
     scenarios = build_risk_scenarios(train_returns, frontier_df, alloc_df)
     optimized_weights = scenarios.loc[scenarios["Scenario"] == "medium", "Weights"].iloc[0]
     optimized_weights = dict(optimized_weights)
 
+    # -----------------------
     # Testing data
+    # -----------------------
     test_tickers = list(dict.fromkeys(list(tickers) + ["^GSPC", "BTC-USD"]))
     test_returns = download_monthly_returns(test_tickers, test_start, test_end)
     test_returns = _normalize_asset_columns(test_returns)
@@ -635,6 +628,7 @@ def backtest_strategies(
     metrics_df.index.name = "Strategy"
     return metrics_df.reset_index()
 
+
 # Convenience wrapper
 
 def run_portfolio_example_v2(
@@ -656,6 +650,7 @@ def run_portfolio_example_v2(
     # Now columns are plain 'AAPL', 'MSFT', ...
     sector_map = get_sector_mapping(monthly_returns.columns)
 
+    # MAIN FRONTIER: keep MIP with 20% cap + min holdings
     try:
         frontier_df, alloc_df = sweep_efficient_frontier_mip(
             monthly_returns,
@@ -715,11 +710,11 @@ def run_portfolio_example_v2(
             print(f"[warn] Backtest failed due to data issues: {exc}")
             backtest_df = None
 
+    # -------------------------------
     # Pretty “recommended outputs”
-    # Backtest table: strategy vs cumulative return, mean, vol
-    # Final distribution for a chosen scenario (here: 'medium')
-    
-     # 1) Backtest table (if available)
+    # -------------------------------
+
+    # 1) Backtest table (if available)
     if backtest_df is not None:
         perf_cols = ["Strategy", "CumulativeReturn", "MeanMonthlyReturn", "Volatility"]
         pretty_backtest = backtest_df[perf_cols].copy()
@@ -754,6 +749,7 @@ def run_portfolio_example_v2(
         print(recommended_alloc_df)
 
     return backtest_df, recommended_alloc_df
+
 
 __all__ = [
     "download_monthly_returns",
