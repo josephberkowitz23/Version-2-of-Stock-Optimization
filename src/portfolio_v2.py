@@ -31,6 +31,10 @@ from pyomo.opt import SolverFactory, TerminationCondition
 IPOPT_PATH = "/content/bin/ipopt"
 
 
+class SolverUnavailableError(RuntimeError):
+    """Raised when a required solver binary cannot be located or is unusable."""
+
+
 # ---------------------------------------------------------------------------
 # Data helpers
 # ---------------------------------------------------------------------------
@@ -249,6 +253,99 @@ def choose_medium_frontier_point(frontier_df: pd.DataFrame) -> pd.Series:
 # Efficient frontier solvers
 # ---------------------------------------------------------------------------
 
+def sweep_efficient_frontier_nlp(
+    returns_df: pd.DataFrame,
+    sector_map: Dict[str, str],
+    bonmin_path: str | None = None,
+    n_points: int = 60,
+    min_weight: float = 0.02,
+    max_weight: float = 0.2,
+    min_stocks: int = 5,
+):
+    """Solve a continuous efficient frontier using IPOPT as a fallback.
+
+    This variant mirrors the MIP API but omits binary activation variables and
+    selection count constraints, making it compatible with continuous solvers
+    such as IPOPT. A variance cap is swept across ``n_points`` values to trace
+    the efficient frontier.
+    """
+
+    model, assets, mu, sigma = build_markowitz_model(returns_df)
+    sigma_np = sigma.values
+    n_assets = len(assets)
+
+    eq_weights = np.ones(n_assets) / n_assets
+    min_var = portfolio_variance(eq_weights, sigma_np)
+    max_var_single = float(np.max(np.diag(sigma_np)))
+
+    min_cap = max(min_var * 0.5, 1e-8)
+    max_cap = max(max_var_single * 1.5, min_cap * 5)
+    caps = np.linspace(min_cap, max_cap, n_points)
+
+    try:
+        solver = SolverFactory("ipopt", executable=IPOPT_PATH)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise SolverUnavailableError(
+            f"Failed to create IPOPT solver with executable={IPOPT_PATH}."
+        ) from exc
+
+    if not solver.available(False):
+        raise SolverUnavailableError(
+            "IPOPT solver is not available. Please ensure IPOPT is installed at IPOPT_PATH."
+        )
+
+    frontier_data = {"Risk": [], "Return": []}
+    alloc_data = {asset: [] for asset in assets}
+    alloc_data["Risk"] = []
+
+    print(
+        f"Solving {len(caps)} NLP portfolio problems from cap={min_cap:.3e} to {max_cap:.3e} using IPOPT..."
+    )
+
+    for cap in caps:
+        if hasattr(model, "risk_constraint"):
+            model.del_component(model.risk_constraint)
+
+        def risk_con(m):
+            return (
+                sum(m.Sigma[i, j] * m.x[i] * m.x[j] for i in m.Assets for j in m.Assets)
+                <= cap
+            )
+
+        model.risk_constraint = Constraint(rule=risk_con)
+
+        try:
+            result = solver.solve(model, tee=False)
+        except Exception as exc:  # pragma: no cover - solver safety
+            print(f"[warn] IPOPT failed for cap={cap:.4e}: {exc}")
+            continue
+
+        term = result.solver.termination_condition
+        if term not in (TerminationCondition.optimal, TerminationCondition.locallyOptimal):
+            print(f"[warn] IPOPT did not converge for cap={cap:.4e} (status={term})")
+            continue
+
+        weights = [model.x[a]() for a in assets]
+        realized_var = portfolio_variance(weights, sigma_np)
+        realized_ret = float(np.dot(mu.values, np.array(weights)))
+
+        frontier_data["Risk"].append(realized_var)
+        frontier_data["Return"].append(realized_ret)
+
+        alloc_data["Risk"].append(realized_var)
+        for asset, weight in zip(assets, weights):
+            alloc_data[asset].append(weight)
+
+    if len(frontier_data["Risk"]) == 0:
+        raise RuntimeError(
+            "No feasible portfolios found with IPOPT. Try different tickers/dates or adjust inputs."
+        )
+
+    frontier_df = pd.DataFrame(frontier_data).sort_values("Risk").reset_index(drop=True)
+    alloc_df = pd.DataFrame(alloc_data).sort_values("Risk").set_index("Risk")
+
+    return frontier_df, alloc_df
+
 def sweep_efficient_frontier_mip(
     returns_df: pd.DataFrame,
     sector_map: Dict[str, str],
@@ -283,9 +380,19 @@ def sweep_efficient_frontier_mip(
     max_cap = max(max_var_single * 1.5, min_cap * 5)
     caps = np.linspace(min_cap, max_cap, n_points)
 
-    solver = SolverFactory("bonmin", executable=bonmin_path) if bonmin_path else SolverFactory("bonmin")
+    try:
+        solver = (
+            SolverFactory("bonmin", executable=bonmin_path)
+            if bonmin_path
+            else SolverFactory("bonmin")
+        )
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise SolverUnavailableError(
+            "BONMIN solver could not be created. Verify installation or bonmin_path."
+        ) from exc
+
     if not solver.available(False):
-        raise RuntimeError(
+        raise SolverUnavailableError(
             "BONMIN solver is not available. Please install BONMIN or adjust bonmin_path."
         )
 
@@ -474,15 +581,27 @@ def backtest_strategies(
     train_returns = download_monthly_returns(tickers, train_start, train_end)
     sector_map = get_sector_mapping(train_returns.columns)
 
-    frontier_df, alloc_df = sweep_efficient_frontier_mip(
-        train_returns,
-        sector_map,
-        bonmin_path=bonmin_path,
-        n_points=40,
-        min_weight=min_weight,
-        max_weight=max_weight,
-        min_stocks=min_stocks,
-    )
+    try:
+        frontier_df, alloc_df = sweep_efficient_frontier_mip(
+            train_returns,
+            sector_map,
+            bonmin_path=bonmin_path,
+            n_points=40,
+            min_weight=min_weight,
+            max_weight=max_weight,
+            min_stocks=min_stocks,
+        )
+    except SolverUnavailableError as exc:
+        print(f"[info] BONMIN unavailable during backtest ({exc}); using IPOPT fallback.")
+        frontier_df, alloc_df = sweep_efficient_frontier_nlp(
+            train_returns,
+            sector_map,
+            bonmin_path=bonmin_path,
+            n_points=40,
+            min_weight=min_weight,
+            max_weight=max_weight,
+            min_stocks=min_stocks,
+        )
     scenarios = build_risk_scenarios(train_returns, frontier_df, alloc_df)
     optimized_weights = scenarios.loc[scenarios["Scenario"] == "medium", "Weights"].iloc[0]
     optimized_weights = dict(optimized_weights)
@@ -531,15 +650,27 @@ def run_portfolio_example_v2(
     monthly_returns = download_monthly_returns(tickers, start_date, end_date)
     sector_map = get_sector_mapping(monthly_returns.columns)
 
-    frontier_df, alloc_df = sweep_efficient_frontier_mip(
-        monthly_returns,
-        sector_map,
-        bonmin_path=bonmin_path,
-        n_points=n_points,
-        min_weight=min_weight,
-        max_weight=max_weight,
-        min_stocks=min_stocks,
-    )
+    try:
+        frontier_df, alloc_df = sweep_efficient_frontier_mip(
+            monthly_returns,
+            sector_map,
+            bonmin_path=bonmin_path,
+            n_points=n_points,
+            min_weight=min_weight,
+            max_weight=max_weight,
+            min_stocks=min_stocks,
+        )
+    except SolverUnavailableError as exc:
+        print(f"[info] BONMIN unavailable ({exc}); falling back to IPOPT continuous frontier.")
+        frontier_df, alloc_df = sweep_efficient_frontier_nlp(
+            monthly_returns,
+            sector_map,
+            bonmin_path=bonmin_path,
+            n_points=n_points,
+            min_weight=min_weight,
+            max_weight=max_weight,
+            min_stocks=min_stocks,
+        )
 
     scenarios_df = build_risk_scenarios(monthly_returns, frontier_df, alloc_df)
 
@@ -570,6 +701,7 @@ __all__ = [
     "build_markowitz_mip_model",
     "portfolio_variance",
     "sweep_efficient_frontier_mip",
+    "sweep_efficient_frontier_nlp",
     "plot_frontier",
     "plot_allocations",
     "build_risk_scenarios",
