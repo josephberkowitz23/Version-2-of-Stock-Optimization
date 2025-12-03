@@ -131,8 +131,15 @@ def get_sector_mapping(tickers: Iterable[str]) -> Dict[str, str]:
 
 # Core Markowitz model builders
 
-def build_markowitz_model(returns_df: pd.DataFrame):
-    """Build a continuous Pyomo Markowitz model (long-only, fully invested)."""
+def build_markowitz_model(
+    returns_df: pd.DataFrame,
+    max_weight: float | None = None,
+) -> tuple[ConcreteModel, list[str], pd.Series, pd.DataFrame]:
+    """
+    Build a continuous Pyomo Markowitz model (long-only, fully invested).
+
+    If max_weight is provided, each asset weight is capped by that value.
+    """
 
     returns_df = _normalize_asset_columns(returns_df)
 
@@ -142,23 +149,48 @@ def build_markowitz_model(returns_df: pd.DataFrame):
 
     model = ConcreteModel()
     model.Assets = Set(initialize=assets)
-    model.x = Var(model.Assets, within=NonNegativeReals, bounds=(0, 1))
+
+    # long-only weights (we'll control upper bounds manually)
+    model.x = Var(model.Assets, within=NonNegativeReals)
+
     model.mu = Param(model.Assets, initialize=mu.to_dict())
 
     sigma_dict = {(i, j): float(sigma.loc[i, j]) for i in assets for j in assets}
     model.Sigma = Param(model.Assets, model.Assets, initialize=sigma_dict)
 
+    # objective: maximize expected return
     def total_return(m):
         return sum(m.mu[a] * m.x[a] for a in m.Assets)
 
     model.obj = Objective(rule=total_return, sense=maximize)
 
+    # fully invested: sum of weights = 1
     def budget(m):
-        return sum(m.x[a] for a in m.Assets) <= 1
+        return sum(m.x[a] for a in m.Assets) == 1
 
     model.budget = Constraint(rule=budget)
 
+    # optional per-asset cap (e.g., 0.2 for 20%)
+    if max_weight is not None:
+        for a in model.Assets:
+            model.x[a].setub(max_weight)
+
     return model, assets, mu, sigma
+
+    # fully invested
+    def budget(m):
+        return sum(m.x[a] for a in m.Assets) == 1
+
+    model.budget = Constraint(rule=budget)
+
+    # optional per-asset cap (e.g. 0.2 = 20%)
+    if max_weight is not None:
+        def max_weight_rule(m, a):
+            return m.x[a] <= max_weight
+        model.max_weight_con = Constraint(model.Assets, rule=max_weight_rule)
+
+    return model, assets, mu, sigma
+
 
 
 def build_markowitz_mip_model(
@@ -261,7 +293,7 @@ def sweep_efficient_frontier_nlp(
     max_weight: float = 0.2,
     min_stocks: int = 5,
 ):
-    """Solve a continuous efficient frontier using IPOPT as a fallback.
+    """Solve a continuous efficient frontier using IPOPT.
 
     This variant mirrors the MIP API but omits binary activation variables and
     selection count constraints, making it compatible with continuous solvers
@@ -269,18 +301,19 @@ def sweep_efficient_frontier_nlp(
     the efficient frontier.
     """
 
-    # These parameters are retained for signature parity with the MIP variant.
-    _ = sector_map, bonmin_path
+    # These are unused but kept so the signature matches the MIP version
+    _ = sector_map, bonmin_path, min_weight, min_stocks
 
-    model, assets, mu, sigma = build_markowitz_model(returns_df)
-    # Respect the max_weight upper bound to mirror the MIP interface as closely
-    # as possible without discrete activation variables.
-    for asset in model.Assets:
-        model.x[asset].setub(max_weight)
-    model, assets, mu, sigma = build_markowitz_model(returns_df)
+    # Build the continuous Markowitz model while enforcing the per-asset cap
+    model, assets, mu, sigma = build_markowitz_model(
+        returns_df,
+        max_weight=max_weight,
+    )
+
     sigma_np = sigma.values
     n_assets = len(assets)
 
+    # Rough bounds for the risk caps
     eq_weights = np.ones(n_assets) / n_assets
     min_var = portfolio_variance(eq_weights, sigma_np)
     max_var_single = float(np.max(np.diag(sigma_np)))
@@ -306,18 +339,21 @@ def sweep_efficient_frontier_nlp(
     alloc_data["Risk"] = []
 
     print(
-        f"Solving {len(caps)} NLP portfolio problems from cap={min_cap:.3e} to {max_cap:.3e} using IPOPT..."
+        f"Solving {len(caps)} NLP portfolio problems from cap={min_cap:.3e} "
+        f"to {max_cap:.3e} using IPOPT..."
     )
 
     for cap in caps:
+        # Drop old risk constraint if present
         if hasattr(model, "risk_constraint"):
             model.del_component(model.risk_constraint)
 
         def risk_con(m):
-            return (
-                sum(m.Sigma[i, j] * m.x[i] * m.x[j] for i in m.Assets for j in m.Assets)
-                <= cap
-            )
+            return sum(
+                m.Sigma[i, j] * m.x[i] * m.x[j]
+                for i in m.Assets
+                for j in m.Assets
+            ) <= cap
 
         model.risk_constraint = Constraint(rule=risk_con)
 
@@ -328,7 +364,10 @@ def sweep_efficient_frontier_nlp(
             continue
 
         term = result.solver.termination_condition
-        if term not in (TerminationCondition.optimal, TerminationCondition.locallyOptimal):
+        if term not in (
+            TerminationCondition.optimal,
+            TerminationCondition.locallyOptimal,
+        ):
             print(f"[warn] IPOPT did not converge for cap={cap:.4e} (status={term})")
             continue
 
@@ -345,104 +384,8 @@ def sweep_efficient_frontier_nlp(
 
     if len(frontier_data["Risk"]) == 0:
         raise RuntimeError(
-            "No feasible portfolios found with IPOPT. Try different tickers/dates or adjust inputs."
-        )
-
-    frontier_df = pd.DataFrame(frontier_data).sort_values("Risk").reset_index(drop=True)
-    alloc_df = pd.DataFrame(alloc_data).sort_values("Risk").set_index("Risk")
-
-    return frontier_df, alloc_df
-
-def sweep_efficient_frontier_mip(
-    returns_df: pd.DataFrame,
-    sector_map: Dict[str, str],
-    bonmin_path: str | None = None,
-    n_points: int = 60,
-    min_weight: float = 0.02,
-    max_weight: float = 0.2,
-    min_stocks: int = 5,
-):
-    """Solve the mixed-integer efficient frontier using BONMIN.
-
-    The solver explores a grid of variance caps to trace the frontier while
-    respecting activation variables, linking constraints, sector coverage, and
-    a minimum number of holdings.
-    """
-
-    model, assets, mu, sigma = build_markowitz_mip_model(
-        returns_df,
-        sector_map,
-        min_weight=min_weight,
-        max_weight=max_weight,
-        min_stocks=min_stocks,
-    )
-    sigma_np = sigma.values
-    n_assets = len(assets)
-
-    eq_weights = np.ones(n_assets) / n_assets
-    min_var = portfolio_variance(eq_weights, sigma_np)
-    max_var_single = float(np.max(np.diag(sigma_np)))
-
-    min_cap = max(min_var * 0.5, 1e-8)
-    max_cap = max(max_var_single * 1.5, min_cap * 5)
-    caps = np.linspace(min_cap, max_cap, n_points)
-
-    try:
-        solver = (
-            SolverFactory("bonmin", executable=bonmin_path)
-            if bonmin_path
-            else SolverFactory("bonmin")
-        )
-    except Exception as exc:  # pragma: no cover - defensive guard
-        raise SolverUnavailableError(
-            "BONMIN solver could not be created. Verify installation or bonmin_path."
-        ) from exc
-
-    if not solver.available(False):
-        raise SolverUnavailableError(
-            "BONMIN solver is not available. Please install BONMIN or adjust bonmin_path."
-        )
-
-    frontier_data = {"Risk": [], "Return": []}
-    alloc_data = {asset: [] for asset in assets}
-    alloc_data["Risk"] = []
-
-    print(
-        f"Solving {len(caps)} MIP portfolio problems from cap={min_cap:.3e} to {max_cap:.3e} using BONMIN..."
-    )
-
-    for cap in caps:
-        if hasattr(model, "risk_constraint"):
-            model.del_component(model.risk_constraint)
-
-        def risk_con(m):
-            return (
-                sum(m.Sigma[i, j] * m.x[i] * m.x[j] for i in m.Assets for j in m.Assets)
-                <= cap
-            )
-
-        model.risk_constraint = Constraint(rule=risk_con)
-
-        result = solver.solve(model, tee=False)
-        term = result.solver.termination_condition
-        if term not in (TerminationCondition.optimal, TerminationCondition.locallyOptimal):
-            print(f"[warn] solver did not converge for cap={cap:.4e} (status={term})")
-            continue
-
-        weights = [model.x[a]() for a in assets]
-        realized_var = portfolio_variance(weights, sigma_np)
-        realized_ret = float(np.dot(mu.values, np.array(weights)))
-
-        frontier_data["Risk"].append(realized_var)
-        frontier_data["Return"].append(realized_ret)
-
-        alloc_data["Risk"].append(realized_var)
-        for asset, weight in zip(assets, weights):
-            alloc_data[asset].append(weight)
-
-    if len(frontier_data["Risk"]) == 0:
-        raise SolverUnavailableError(
-            "No feasible portfolios found with BONMIN; try adjusting inputs or use a continuous fallback."
+            "No feasible portfolios found with IPOPT. "
+            "Try different tickers/dates or adjust inputs."
         )
 
     frontier_df = pd.DataFrame(frontier_data).sort_values("Risk").reset_index(drop=True)
