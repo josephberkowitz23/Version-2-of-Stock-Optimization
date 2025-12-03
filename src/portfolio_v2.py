@@ -688,18 +688,38 @@ def run_portfolio_example_v2(
     plot_allocations(alloc_df)
 
     backtest_df = None
+        backtest_df = None
     if run_backtest:
-        backtest_df = backtest_strategies(
-            tickers,
-            train_start=start_date,
-            train_end=end_date,
-            test_start=end_date,
-            test_end=end_date,
-            bonmin_path=bonmin_path,
-            min_weight=min_weight,
-            max_weight=max_weight,
-            min_stocks=min_stocks,
+        # Define an out of sample test window after the training period
+        end_ts = pd.to_datetime(end_date)
+        test_start_ts = end_ts + pd.DateOffset(days=1)      # first day after training
+        test_end_ts = test_start_ts + pd.DateOffset(months=12)  # next 12 months
+
+        test_start_str = test_start_ts.strftime("%Y-%m-%d")
+        test_end_str = test_end_ts.strftime("%Y-%m-%d")
+
+        print(
+            f"[info] Running backtest on out-of-sample window "
+            f"{test_start_str} to {test_end_str}"
         )
+
+        try:
+            backtest_df = backtest_strategies(
+                tickers,
+                train_start=start_date,
+                train_end=end_date,
+                test_start=test_start_str,
+                test_end=test_end_str,
+                bonmin_path=bonmin_path,
+                min_weight=min_weight,
+                max_weight=max_weight,
+                min_stocks=min_stocks,
+            )
+        except RuntimeError as exc:
+            # Most likely: no valid price data in the test window
+            print(f"[warn] Backtest failed due to data issues: {exc}")
+            backtest_df = None
+
 
     return monthly_returns, frontier_df, alloc_df, scenarios_df, backtest_df
 
