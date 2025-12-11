@@ -44,7 +44,7 @@ backtest_df, alloc_df = run_portfolio_example_v2(
     bonmin_path=None,
     n_points=60,
     min_weight=0.05,
-    max_weight=0.10,
+    max_weight=0.50,
     min_stocks=10,
     run_backtest=True,
 )
